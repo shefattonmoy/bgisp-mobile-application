@@ -1,0 +1,72 @@
+name: bgisp
+description: "Bangladesh GIS Platform - A comprehensive geospatial data infrastructure application"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  cupertino_icons: ^1.0.9
+  font_awesome_flutter: ^11.0.0
+  http: ^1.6.0
+  connectivity_plus: ^7.1.1
+  fluttertoast: ^9.0.0
+  cached_network_image: ^3.4.1
+  shimmer: ^3.0.0
+  url_launcher: ^6.3.2
+  flutter_dotenv: ^6.0.1
+  shared_preferences: ^2.5.5
+  provider: ^6.1.5+1
+  flutter_screenutil: ^5.9.3
+  intl: ^0.20.2
+  webview_flutter: ^4.13.1
+  flutter_map: ^8.3.0
+  latlong2: ^0.9.1
+  proj4dart: ^3.0.0
+  fl_chart: ^1.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  
+  # Linting rules
+  flutter_lints: ^6.0.0
+  
+  # Code generation (if needed)
+  build_runner: ^2.4.9
+  json_serializable: ^6.7.1
+  
+  # Testing utilities
+  mockito: ^5.4.4
+  integration_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  
+  # Assets declaration
+  assets:
+    - assets/images/cegis_logo.png
+    - assets/images/bgisp_logo.png
+    - assets/images/partner1.png
+    - assets/images/partner2.png
+    - assets/images/partner3.png
+    - assets/images/partner4.png
+    - assets/images/partner5.png
+    - assets/images/partner6.png
+    - assets/images/partner7.png
+    - assets/images/partner8.png
+    - assets/slider_images/slider1.png
+    - assets/slider_images/slider2.png
+    - assets/slider_images/slider3.png
+    - assets/slider_images/slider4.png
+    - assets/slider_images/slider5.png
+    - assets/slider_images/slider6.png
+    - assets/slider_images/slider7.jpg
+    - assets/slider_images/slider8.jpg
+  
