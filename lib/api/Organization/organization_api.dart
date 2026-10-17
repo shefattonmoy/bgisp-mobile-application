@@ -37,6 +37,38 @@ class OrganizationApi {
     }
   }
 
+  /// Derives the distinct organization types from the existing
+  /// `/api/get_member_organizations/` response. No new endpoint needed.
+  ///
+  /// Pass [preloaded] to reuse an already-fetched list.
+  Future<List<OrganizationType>> getOrganizationTypes({
+    String lang = 'en',
+    List<MemberOrganization>? preloaded,
+  }) async {
+    final organizations = preloaded ?? await getOrganizations(lang: lang);
+
+    const uncategorized = 'Uncategorized';
+    final Map<String, int> counts = {};
+
+    for (final org in organizations) {
+      final raw = org.organizationsType?.trim();
+      final key = (raw == null || raw.isEmpty) ? uncategorized : raw;
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+
+    final types = counts.entries
+        .map((e) => OrganizationType(name: e.key, count: e.value))
+        .toList();
+
+    types.sort((a, b) {
+      if (a.name == uncategorized && b.name != uncategorized) return 1;
+      if (b.name == uncategorized && a.name != uncategorized) return -1;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+
+    return types;
+  }
+
   Future<MemberOrganization> getOrganizationDetail(
     int id, {
     String lang = 'en',

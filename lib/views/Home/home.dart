@@ -18,6 +18,7 @@ import '../IntegratedGeoportal/integrated_geoportal_page.dart';
 import '../TimeSeriesAnalysis/time_series_analysis_page.dart';
 import '../FocalPoint/focal_point_page.dart';
 import '../Gallery/gallery_page.dart';
+import '../GeocodeDownload/geocode_download_page.dart';
 import '../../views/DataViewer/data_viewer.dart';
 import '../../views/Metadata/metadata_viewer.dart';
 import '../../views/About/about_page.dart';
@@ -317,6 +318,25 @@ class _HomePageState extends State<HomePage> {
                                 MaterialPageRoute(
                                   builder: (context) =>
                                       const GeoportalMapPage(),
+                                ),
+                              );
+                            }
+                          });
+                        },
+                      ),
+                      _buildSubDrawerItem(
+                        t['geocodeDownload'] ?? 'Geocode Download',
+                        'geocodeDownload',
+                        Icons.cloud_download,
+                        () {
+                          Navigator.pop(context);
+                          Future.delayed(const Duration(milliseconds: 300), () {
+                            if (mounted) {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      const GeocodeDownloadPage(),
                                 ),
                               );
                             }

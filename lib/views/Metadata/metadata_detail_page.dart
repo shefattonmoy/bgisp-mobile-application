@@ -1,7 +1,12 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'dart:convert';
+import 'package:provider/provider.dart';
+
 import '../../constants/constant.dart';
+import '../../providers/language_provider.dart';
+import '../../services/download_service.dart';
 
 class MetadataDetailPage extends StatefulWidget {
   final int metadataId;
@@ -18,6 +23,7 @@ class MetadataDetailPage extends StatefulWidget {
 class _MetadataDetailPageState extends State<MetadataDetailPage> {
   Map<String, dynamic>? _record;
   bool _isLoading = true;
+  bool _isDownloading = false;
   String? _error;
 
   @override
@@ -27,11 +33,17 @@ class _MetadataDetailPageState extends State<MetadataDetailPage> {
   }
 
   Future<void> _loadMetadataDetail() async {
-    setState(() { _isLoading = true; _error = null; });
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
     try {
-      final url = '${AppConstants.myAPILink}/api/get_metadata/${widget.metadataId}/';
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
-      
+      final url =
+          '${AppConstants.myAPILink}/api/get_metadata/${widget.metadataId}/';
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 30));
+
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (mounted) {
@@ -41,12 +53,49 @@ class _MetadataDetailPageState extends State<MetadataDetailPage> {
           });
         }
       } else if (response.statusCode == 404) {
-        if (mounted) setState(() { _error = 'Metadata not found'; _isLoading = false; });
+        if (mounted) {
+          setState(() {
+            _error = 'Metadata not found';
+            _isLoading = false;
+          });
+        }
       } else {
         throw Exception('Failed to load');
       }
     } catch (e) {
-      if (mounted) setState(() { _error = 'Error loading metadata'; _isLoading = false; });
+      if (mounted) {
+        setState(() {
+          _error = 'Error loading metadata';
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  String _currentLang() {
+    try {
+      final provider = Provider.of<LanguageProvider>(context, listen: false);
+      return provider.language == 'BN' ? 'BN' : 'EN';
+    } catch (_) {
+      return 'EN';
+    }
+  }
+
+  Future<void> _downloadExcel() async {
+    if (_record == null || _isDownloading) return;
+    setState(() => _isDownloading = true);
+    try {
+      await DownloadService.downloadMetadataExcel(
+        record: _record!,
+        language: _currentLang(),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Download failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isDownloading = false);
     }
   }
 
@@ -68,18 +117,45 @@ class _MetadataDetailPageState extends State<MetadataDetailPage> {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 1,
+        actions: [
+          IconButton(
+            tooltip: 'Download Excel',
+            onPressed:
+                (_record == null || _isDownloading) ? null : _downloadExcel,
+            icon: _isDownloading
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.download_outlined),
+          ),
+        ],
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF008080)))
+          ? const Center(
+              child: CircularProgressIndicator(color: Color(0xFF008080)),
+            )
           : _error != null
               ? Center(
-                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Icon(Icons.error_outline, size: 48, color: Colors.red[300]),
-                    const SizedBox(height: 16),
-                    Text(_error!, style: const TextStyle(fontSize: 16, color: Colors.red)),
-                    const SizedBox(height: 16),
-                    ElevatedButton(onPressed: _loadMetadataDetail, child: const Text('Retry')),
-                  ]),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.error_outline,
+                          size: 48, color: Colors.red[300]),
+                      const SizedBox(height: 16),
+                      Text(
+                        _error!,
+                        style:
+                            const TextStyle(fontSize: 16, color: Colors.red),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: _loadMetadataDetail,
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
                 )
               : SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
@@ -98,36 +174,55 @@ class _MetadataDetailPageState extends State<MetadataDetailPage> {
                           ),
                           borderRadius: BorderRadius.circular(20),
                           boxShadow: [
-                            BoxShadow(color: const Color(0xFF1a1a2e).withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 10)),
+                            BoxShadow(
+                              color: const Color(0xFF1a1a2e).withOpacity(0.3),
+                              blurRadius: 20,
+                              offset: const Offset(0, 10),
+                            ),
                           ],
                         ),
                         child: Column(
                           children: [
                             Container(
-                              width: 64, height: 64,
+                              width: 64,
+                              height: 64,
                               decoration: BoxDecoration(
                                 color: Colors.white.withOpacity(0.15),
                                 borderRadius: BorderRadius.circular(16),
                               ),
-                              child: const Icon(Icons.description_outlined, color: Colors.white, size: 32),
+                              child: const Icon(
+                                Icons.description_outlined,
+                                color: Colors.white,
+                                size: 32,
+                              ),
                             ),
                             const SizedBox(height: 16),
                             Text(
                               _record?['title'] ?? 'Untitled',
-                              style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
                               textAlign: TextAlign.center,
                             ),
                             const SizedBox(height: 8),
                             if (_record?['contributor'] != null)
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
                                 decoration: BoxDecoration(
                                   color: Colors.white.withOpacity(0.1),
                                   borderRadius: BorderRadius.circular(20),
                                 ),
                                 child: Text(
                                   _record!['contributor'],
-                                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ),
                           ],
@@ -142,41 +237,81 @@ class _MetadataDetailPageState extends State<MetadataDetailPage> {
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(20),
-                          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 15, offset: const Offset(0, 5))],
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 15,
+                              offset: const Offset(0, 5),
+                            ),
+                          ],
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Row(children: [
-                              Icon(Icons.info_outline, color: Color(0xFF008080), size: 20),
-                              SizedBox(width: 8),
-                              Text('Metadata Information', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1e293b))),
-                            ]),
+                            const Row(
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  color: Color(0xFF008080),
+                                  size: 20,
+                                ),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Metadata Information',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF1e293b),
+                                  ),
+                                ),
+                              ],
+                            ),
                             const SizedBox(height: 20),
                             _buildDetailRow('Title', _record?['title']),
-                            _buildDetailRow('Contributor', _record?['contributor']),
-                            _buildDetailRow('Data Type', _record?['data_type']),
-                            _buildDetailRow('Vector Format', _record?['vector_format']),
-                            _buildDetailRow('Raster Format', _record?['raster_format']),
-                            _buildDetailRow('Number of Layers', _record?['layers_number']),
+                            _buildDetailRow(
+                                'Contributor', _record?['contributor']),
+                            _buildDetailRow(
+                                'Data Type', _record?['data_type']),
+                            _buildDetailRow(
+                                'Vector Format', _record?['vector_format']),
+                            _buildDetailRow(
+                                'Raster Format', _record?['raster_format']),
+                            _buildDetailRow(
+                                'Number of Layers', _record?['layers_number']),
                             _buildDetailRow('Datum', _record?['datum']),
-                            _buildDetailRow('Projection', _record?['projection']),
-                            _buildDetailRow('Semi-Major/Minor Axis', _record?['semi_major_minor_axis']),
-                            _buildDetailRow('Flattening Ratio', _record?['flattening_ratio']),
-                            _buildDetailRow('Dimension', _record?['dimension']),
-                            _buildDetailRow('Software Version', _record?['software_version']),
+                            _buildDetailRow(
+                                'Projection', _record?['projection']),
+                            _buildDetailRow('Semi-Major/Minor Axis',
+                                _record?['semi_major_minor_axis']),
+                            _buildDetailRow(
+                                'Flattening Ratio', _record?['flattening_ratio']),
+                            _buildDetailRow(
+                                'Dimension', _record?['dimension']),
+                            _buildDetailRow(
+                                'Software Version', _record?['software_version']),
                             _buildDetailRow('Scale', _record?['scale']),
-                            _buildDetailRow('Admin Levels', _record?['admin_levels']),
-                            _buildDetailRow('Area Coverage', _record?['area_coverage']),
-                            _buildDetailRow('Data Collection Method', _record?['data_collection_method']),
-                            _buildDetailRow('Survey Year', _record?['survey_year']),
-                            _buildDetailRow('Update Frequency', _record?['update_frequency']),
-                            _buildDetailRow('Data Volume', _record?['data_volume']),
-                            _buildDetailRow('Data Compatibility', _record?['data_compatibility']),
-                            _buildDetailRow('Conflict of Interest', _record?['conflict_of_interest']),
-                            _buildDetailRow('Purpose of Use', _record?['purpose_of_use']),
-                            _buildDetailRow('Availability', _record?['availability']),
-                            _buildDetailRow('Cost Per Unit', _record?['cost_per_unit']),
+                            _buildDetailRow(
+                                'Admin Levels', _record?['admin_levels']),
+                            _buildDetailRow(
+                                'Area Coverage', _record?['area_coverage']),
+                            _buildDetailRow('Data Collection Method',
+                                _record?['data_collection_method']),
+                            _buildDetailRow(
+                                'Survey Year', _record?['survey_year']),
+                            _buildDetailRow(
+                                'Update Frequency', _record?['update_frequency']),
+                            _buildDetailRow(
+                                'Data Volume', _record?['data_volume']),
+                            _buildDetailRow('Data Compatibility',
+                                _record?['data_compatibility']),
+                            _buildDetailRow('Conflict of Interest',
+                                _record?['conflict_of_interest']),
+                            _buildDetailRow(
+                                'Purpose of Use', _record?['purpose_of_use']),
+                            _buildDetailRow(
+                                'Availability', _record?['availability']),
+                            _buildDetailRow(
+                                'Cost Per Unit', _record?['cost_per_unit']),
                           ],
                         ),
                       ),
@@ -190,7 +325,7 @@ class _MetadataDetailPageState extends State<MetadataDetailPage> {
   Widget _buildDetailRow(String label, dynamic value) {
     final displayValue = _formatValue(value);
     final isEven = label.length % 2 == 0;
-    
+
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
       margin: const EdgeInsets.only(bottom: 8),
@@ -218,7 +353,9 @@ class _MetadataDetailPageState extends State<MetadataDetailPage> {
             child: Text(
               displayValue,
               style: TextStyle(
-                color: displayValue == 'Not available' ? Colors.grey[400] : const Color(0xFF1e293b),
+                color: displayValue == 'Not available'
+                    ? Colors.grey[400]
+                    : const Color(0xFF1e293b),
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
               ),

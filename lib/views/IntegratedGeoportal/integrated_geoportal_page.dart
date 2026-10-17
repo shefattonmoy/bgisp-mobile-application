@@ -220,7 +220,7 @@ class _GeoportalMapPageState extends State<GeoportalMapPage> {
               var adminLayers = [{
                 id: "division",
                 name: "Division",
-                url: "https://www.arcgisbd.com/server/rest/services/BBS009/geo_division_boundary_aam/FeatureServer",
+                url: "https://www.arcgisbd.com/server/rest/services/BBS009/geo_boundary_division/FeatureServer",
                 fieldName: "division_name",
                 fieldCode: "division_code"
               }];
@@ -361,7 +361,7 @@ class _GeoportalMapPageState extends State<GeoportalMapPage> {
               // Load default layer
               view.when(function() {
                 document.getElementById('loader').style.display = 'none';
-                window._loadAdminLayer('division', 'https://www.arcgisbd.com/server/rest/services/BBS009/geo_division_boundary_aam/FeatureServer', 'division_name', 'division_code', 'Division');
+                window._loadAdminLayer('division', 'https://www.arcgisbd.com/server/rest/services/BBS009/geo_boundary_division/FeatureServer', 'division_name', 'division_code', 'Division');
               });
               
               console.log('✅ Map initialized with ' + adminLayers.length + ' admin layers and ' + window.SIDEBAR_LAYERS.length + ' data layers');

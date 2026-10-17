@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../../constants/constant.dart';
 import '../../models/DataViewer/data_viewer.dart';
+import '../../services/download_service.dart';
 import 'data_detail_page.dart';
 
 class DataViewerPage extends StatefulWidget {
@@ -186,6 +187,38 @@ class _DataViewerPageState extends State<DataViewerPage> {
       'Business': Icons.store,
     };
     return i[name] ?? Icons.folder;
+  }
+
+  Future<void> _downloadGroup(DataRecord item) async {
+    final List<int> ids = [];
+    if (item.records != null) {
+      for (final r in item.records!) {
+        if (r.id > 0) ids.add(r.id);
+      }
+    }
+    if (ids.isEmpty && item.id > 0) {
+      ids.add(item.id);
+    }
+    if (ids.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No downloadable files in this record.')),
+      );
+      return;
+    }
+
+    try {
+      // Single endpoint for all cases — same as web DataViewer.jsx.
+      await DownloadService.downloadDataZip(
+        ids: ids,
+        title: item.title ?? 'download',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Download failed: $e')));
+    }
   }
 
   @override
@@ -683,10 +716,19 @@ class _DataViewerPageState extends State<DataViewerPage> {
                       ),
                     ),
                   const SizedBox(height: 4),
-                  Icon(
-                    Icons.arrow_circle_right,
-                    size: 22,
-                    color: color.withOpacity(0.5),
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 32,
+                      height: 32,
+                    ),
+                    tooltip: 'Download',
+                    onPressed: () => _downloadGroup(item),
+                    icon: Icon(
+                      Icons.download_outlined,
+                      size: 20,
+                      color: color.withOpacity(0.75),
+                    ),
                   ),
                 ],
               ),

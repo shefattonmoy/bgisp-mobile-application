@@ -1,13 +1,57 @@
 import 'package:flutter/material.dart';
-import '../../models/DataViewer/data_viewer.dart';
 
-class DataDetailPage extends StatelessWidget {
+import '../../models/DataViewer/data_viewer.dart';
+import '../../services/download_service.dart';
+
+class DataDetailPage extends StatefulWidget {
   final DataRecord dataRecord;
 
   const DataDetailPage({super.key, required this.dataRecord});
 
   @override
+  State<DataDetailPage> createState() => _DataDetailPageState();
+}
+
+class _DataDetailPageState extends State<DataDetailPage> {
+  bool _isDownloading = false;
+
+  Future<void> _downloadGroup() async {
+    if (_isDownloading) return;
+
+    final record = widget.dataRecord;
+
+    final List<int> ids = [];
+    if (record.records != null && record.records!.isNotEmpty) {
+      for (final r in record.records!) {
+        if (r.id > 0) ids.add(r.id);
+      }
+    }
+    if (ids.isEmpty && record.id > 0) {
+      ids.add(record.id);
+    }
+    if (ids.isEmpty) return;
+
+    setState(() => _isDownloading = true);
+    try {
+      // Single endpoint for all cases — same as web DataViewer.jsx.
+      await DownloadService.downloadDataZip(
+        ids: ids,
+        title: record.title ?? 'download',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Download failed: $e')));
+    } finally {
+      if (mounted) setState(() => _isDownloading = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final dataRecord = widget.dataRecord;
+
     return Scaffold(
       backgroundColor: const Color(0xFFf8f9fa),
       appBar: AppBar(
@@ -19,6 +63,19 @@ class DataDetailPage extends StatelessWidget {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 1,
+        actions: [
+          IconButton(
+            tooltip: 'Download',
+            onPressed: _isDownloading ? null : _downloadGroup,
+            icon: _isDownloading
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.download_outlined),
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
