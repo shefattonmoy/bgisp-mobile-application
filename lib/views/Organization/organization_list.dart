@@ -245,7 +245,7 @@ class _OrganizationListPageState extends State<OrganizationListPage> {
       child: ListView.separated(
         padding: const EdgeInsets.all(16),
         itemCount: _types.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 12),
+        separatorBuilder: (_, _) => const SizedBox(height: 12),
         itemBuilder: (context, index) {
           final type = _types[index];
           return Card(

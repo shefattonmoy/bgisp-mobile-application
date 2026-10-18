@@ -1,11 +1,15 @@
-import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'package:http/http.dart' as http;
+// lib/screens/Organization/organization_data_tab.dart
 import 'dart:convert';
-import '../../../constants/constant.dart';
+
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
+
 import '../../../api/Organization/organization_api.dart';
-import 'package:bgisp/models/ThematicArea/thematic_area.dart';
+import '../../../constants/constant.dart';
+import '../../../models/ThematicArea/thematic_area.dart';
 import '../../../providers/language_provider.dart';
+import '../../../services/download_service.dart';
 
 class OrganizationDataTab extends StatefulWidget {
   final int organizationId;
@@ -27,6 +31,8 @@ class _OrganizationDataTabState extends State<OrganizationDataTab> {
   String _searchTerm = '';
   int _currentPage = 0;
   final int _rowsPerPage = 6;
+
+  // Per-card download spinner.
   int? _downloadingId;
 
   @override
@@ -108,23 +114,45 @@ class _OrganizationDataTabState extends State<OrganizationDataTab> {
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // DOWNLOAD (per-card only)
+  // ---------------------------------------------------------------------------
+
   Future<void> _downloadFile(Map<String, dynamic> record) async {
-    setState(() => _downloadingId = record['id']);
-    try {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Downloading: ${record['title'] ?? 'file'}')),
-      );
-    } catch (e) {
+    final id = record['id'];
+    if (id is! int) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Download failed'),
+          content: Text('Invalid file id'),
           backgroundColor: Colors.red,
         ),
       );
+      return;
+    }
+
+    setState(() => _downloadingId = id);
+    try {
+      await DownloadService.downloadDataZip(
+        ids: [id],
+        title: (record['title'] ?? 'file').toString(),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Download failed: $e'),
+            backgroundColor: Colors.red[700],
+          ),
+        );
+      }
     } finally {
-      setState(() => _downloadingId = null);
+      if (mounted) setState(() => _downloadingId = null);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // FILTER / PAGING
+  // ---------------------------------------------------------------------------
 
   List<Map<String, dynamic>> get _filteredRecords {
     if (_searchTerm.isEmpty) return _dataRecords;
@@ -220,6 +248,10 @@ class _OrganizationDataTabState extends State<OrganizationDataTab> {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // BUILD
+  // ---------------------------------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
     final langProvider = Provider.of<LanguageProvider>(context);
@@ -250,6 +282,10 @@ class _OrganizationDataTabState extends State<OrganizationDataTab> {
 
     if (_selectedThematicId != null) return _buildRecordsView();
 
+    return _buildThematicGrid(isBangla);
+  }
+
+  Widget _buildThematicGrid(bool isBangla) {
     if (_thematicAreas.isEmpty) {
       return Center(
         child: Column(
@@ -299,37 +335,12 @@ class _OrganizationDataTabState extends State<OrganizationDataTab> {
 
   Widget _buildRecordsView() {
     final color = _getColor(_selectedThematicName);
+
     return Column(
       children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          color: color.withOpacity(0.05),
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.arrow_back, size: 20),
-                onPressed: _goBackToThematicAreas,
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  _selectedThematicName,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: color,
-                  ),
-                ),
-              ),
-              Text(
-                '${_filteredRecords.length} records',
-                style: TextStyle(color: Colors.grey[600], fontSize: 13),
-              ),
-            ],
-          ),
-        ),
+        // Search row — no back arrow, no count pill.
         Padding(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
           child: TextField(
             decoration: InputDecoration(
               hintText: 'Search...',
@@ -365,6 +376,8 @@ class _OrganizationDataTabState extends State<OrganizationDataTab> {
             }),
           ),
         ),
+
+        // Records
         Expanded(
           child: _isLoadingData
               ? const Center(child: CircularProgressIndicator())
@@ -377,6 +390,8 @@ class _OrganizationDataTabState extends State<OrganizationDataTab> {
                       _buildFullWidthCard(_currentPageData[index], color),
                 ),
         ),
+
+        // Pagination
         if (_totalPages > 1)
           Container(
             padding: const EdgeInsets.all(10),
@@ -411,6 +426,9 @@ class _OrganizationDataTabState extends State<OrganizationDataTab> {
   Widget _buildFullWidthCard(Map<String, dynamic> record, Color color) {
     final tc = _getTypeBadgeColor(record['data_type']);
     final tb = _getTypeBadgeBg(record['data_type']);
+    final id = record['id'];
+    final isDownloading = _downloadingId == id;
+
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       elevation: 2,
@@ -515,24 +533,27 @@ class _OrganizationDataTabState extends State<OrganizationDataTab> {
               ),
             ),
             const SizedBox(width: 8),
-            _downloadingId == record['id']
-                ? const SizedBox(
-                    width: 28,
-                    height: 28,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Color(0xFF008080),
-                    ),
-                  )
-                : IconButton(
-                    icon: const Icon(
-                      Icons.download_rounded,
-                      color: Color(0xFF008080),
-                      size: 26,
-                    ),
-                    tooltip: 'Download',
-                    onPressed: () => _downloadFile(record),
-                  ),
+
+            // Per-card download button (only download entry point)
+            if (isDownloading)
+              const SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Color(0xFF008080),
+                ),
+              )
+            else
+              IconButton(
+                icon: const Icon(
+                  Icons.download_rounded,
+                  color: Color(0xFF008080),
+                  size: 26,
+                ),
+                tooltip: 'Download',
+                onPressed: id is int ? () => _downloadFile(record) : null,
+              ),
           ],
         ),
       ),
@@ -574,7 +595,6 @@ class _OrganizationDataTabState extends State<OrganizationDataTab> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Outer Ring
           AnimatedContainer(
             duration: const Duration(milliseconds: 400),
             width: 90,
@@ -649,7 +669,6 @@ class _OrganizationDataTabState extends State<OrganizationDataTab> {
             ),
           ),
           const SizedBox(height: 6),
-          // Title
           SizedBox(
             width: 90,
             child: Text(
@@ -668,7 +687,6 @@ class _OrganizationDataTabState extends State<OrganizationDataTab> {
             ),
           ),
           const SizedBox(height: 1),
-          // Records label
           Text(
             count == 1 ? 'Record' : 'Records',
             style: TextStyle(

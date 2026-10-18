@@ -577,7 +577,7 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
             'id': item['city_id'] ?? item['city_corporation_id'],
             'value': _clean(item['city_code'] ?? item['city_corporation_code']),
             'label':
-                '${_clean(item['city_name'] ?? item['city_corporation_name'])} (${geo})',
+                '${_clean(item['city_name'] ?? item['city_corporation_name'])} ($geo)',
             'name': _clean(item['city_name'] ?? item['city_corporation_name']),
             'geo_code': geo,
             'is_other_area': isOther,
@@ -1801,8 +1801,8 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: const [
+          const Row(
+            children: [
               Icon(Icons.apartment, size: 14, color: Color(0xFF2563EB)),
               SizedBox(width: 6),
               Expanded(

@@ -15,7 +15,6 @@ import '../Organization/organization_list.dart';
 import '../ExecutiveCommittee/executive_committee_page.dart';
 import '../TechnicalCommittee/technical_committee_page.dart';
 import '../IntegratedGeoportal/integrated_geoportal_page.dart';
-import '../TimeSeriesAnalysis/time_series_analysis_page.dart';
 import '../FocalPoint/focal_point_page.dart';
 import '../Gallery/gallery_page.dart';
 import '../GeocodeDownload/geocode_download_page.dart';
@@ -337,25 +336,6 @@ class _HomePageState extends State<HomePage> {
                                 MaterialPageRoute(
                                   builder: (context) =>
                                       const GeocodeDownloadPage(),
-                                ),
-                              );
-                            }
-                          });
-                        },
-                      ),
-                      _buildSubDrawerItem(
-                        t['timeSeriesAnalysis'] ?? 'Time Series Analysis',
-                        'timeseries',
-                        Icons.timeline,
-                        () {
-                          Navigator.pop(context);
-                          Future.delayed(const Duration(milliseconds: 300), () {
-                            if (mounted) {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) =>
-                                      const TimeSeriesAnalysisPage(),
                                 ),
                               );
                             }

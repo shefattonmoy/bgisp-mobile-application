@@ -1,3 +1,4 @@
+// lib/services/download_service.dart
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -8,6 +9,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../constants/constant.dart';
+
+typedef ProgressCallback = void Function(String message, {double? fraction});
 
 class DownloadService {
   DownloadService._();
@@ -75,6 +78,7 @@ class DownloadService {
     },
   };
 
+  /// Ordered list of (jsonKey, labelKey) — also used as column order for multi-export.
   static const List<MapEntry<String, String>> _metadataFieldOrder = [
     MapEntry('title', 'title'),
     MapEntry('contributor', 'contributor'),
@@ -103,15 +107,52 @@ class DownloadService {
   ];
 
   // ---------------------------------------------------------------------------
-  // METADATA EXPORT (client-side, matches web XLSX.writeFile output)
+  // KEY NORMALIZATION
+  // Accepts snake_case / camelCase / kebab-case JSON. Returns a map keyed
+  // by snake_case (matching _metadataFieldOrder).
+  // ---------------------------------------------------------------------------
+
+  static Map<String, dynamic> _normalizeRecord(Map<String, dynamic> raw) {
+    final out = <String, dynamic>{};
+    for (final entry in raw.entries) {
+      final snake = _toSnakeCase(entry.key);
+      out[snake] = entry.value;
+    }
+    return out;
+  }
+
+  static String _toSnakeCase(String input) {
+    // Insert underscore before capitals, lowercase everything.
+    final buf = StringBuffer();
+    for (int i = 0; i < input.length; i++) {
+      final ch = input[i];
+      final code = ch.codeUnitAt(0);
+      final isUpper = code >= 65 && code <= 90;
+      if (isUpper && i > 0) {
+        final prev = input.codeUnitAt(i - 1);
+        final prevLower = prev >= 97 && prev <= 122;
+        final prevDigit = prev >= 48 && prev <= 57;
+        if (prevLower || prevDigit) buf.write('_');
+      }
+      buf.write(ch.toLowerCase());
+    }
+    return buf.toString().replaceAll('-', '_').replaceAll(RegExp(r'__+'), '_');
+  }
+
+  // ---------------------------------------------------------------------------
+  // METADATA EXPORT — single record (two-column Field/Value sheet)
   // ---------------------------------------------------------------------------
 
   static Future<void> downloadMetadataExcel({
     required Map<String, dynamic> record,
     String language = 'EN',
+    ProgressCallback? onProgress,
   }) async {
+    onProgress?.call('Building workbook...', fraction: 0.1);
+
     final labels = _metadataLabels[language] ?? _metadataLabels['EN']!;
     final notAvailable = labels['notAvailable']!;
+    final normalized = _normalizeRecord(record);
 
     final excel = Excel.createExcel();
     const sheetName = 'Metadata Details';
@@ -131,8 +172,8 @@ class DownloadService {
       final labelKey = entry.value;
       final label = labels[labelKey] ?? labelKey;
 
-      final raw = record[jsonKey];
-      final valueText = (raw == null || raw.toString().isEmpty)
+      final raw = normalized[jsonKey];
+      final valueText = (raw == null || raw.toString().trim().isEmpty)
           ? notAvailable
           : raw.toString();
 
@@ -142,12 +183,14 @@ class DownloadService {
     sheet.setColumnWidth(0, 30);
     sheet.setColumnWidth(1, 50);
 
+    onProgress?.call('Saving file...', fraction: 0.8);
+
     final bytes = excel.save();
     if (bytes == null) {
       throw Exception('Failed to build Excel workbook.');
     }
 
-    final rawTitle = (record['title']?.toString() ?? '').trim();
+    final rawTitle = (normalized['title']?.toString() ?? '').trim();
     final safeTitle = _sanitizeFileName(rawTitle.isEmpty ? 'record' : rawTitle);
     final fileName = '$safeTitle.xlsx';
 
@@ -158,28 +201,119 @@ class DownloadService {
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       shareText: rawTitle.isEmpty ? 'Metadata Details' : rawTitle,
     );
+
+    onProgress?.call('Done.', fraction: 1.0);
   }
 
   // ---------------------------------------------------------------------------
-  // DATA DOWNLOAD (single endpoint, matching DataViewer.jsx)
+  // METADATA EXPORT — multiple records (one row per record, wide table)
+  // ---------------------------------------------------------------------------
+
+  static Future<void> downloadMetadataExcelMulti({
+    required List<Map<String, dynamic>> records,
+    String language = 'EN',
+    String fileName = 'metadata_export',
+    ProgressCallback? onProgress,
+  }) async {
+    if (records.isEmpty) {
+      throw Exception('No records to export.');
+    }
+
+    onProgress?.call('Preparing ${records.length} records...', fraction: 0.1);
+
+    final labels = _metadataLabels[language] ?? _metadataLabels['EN']!;
+    final notAvailable = labels['notAvailable']!;
+
+    final excel = Excel.createExcel();
+    const sheetName = 'Metadata';
+    final defaultSheet = excel.getDefaultSheet();
+    if (defaultSheet != null && defaultSheet != sheetName) {
+      excel.rename(defaultSheet, sheetName);
+    }
+    final sheet = excel[sheetName];
+
+    // Header row.
+    final header = _metadataFieldOrder
+        .map((e) => TextCellValue(labels[e.value] ?? e.value))
+        .toList();
+    sheet.appendRow(header);
+
+    // Data rows.
+    int i = 0;
+    for (final rec in records) {
+      i++;
+      final normalized = _normalizeRecord(rec);
+      final row = _metadataFieldOrder.map((e) {
+        final raw = normalized[e.key];
+        final text = (raw == null || raw.toString().trim().isEmpty)
+            ? notAvailable
+            : raw.toString();
+        return TextCellValue(text);
+      }).toList();
+      sheet.appendRow(row);
+
+      if (i % 25 == 0) {
+        onProgress?.call(
+          'Writing $i / ${records.length}...',
+          fraction: 0.1 + 0.6 * (i / records.length),
+        );
+      }
+    }
+
+    // Column widths.
+    for (int c = 0; c < _metadataFieldOrder.length; c++) {
+      int longest = (labels[_metadataFieldOrder[c].value] ?? '').length;
+      for (final rec in records) {
+        final n = _normalizeRecord(rec);
+        final v = n[_metadataFieldOrder[c].key]?.toString() ?? '';
+        if (v.length > longest) longest = v.length;
+      }
+      sheet.setColumnWidth(c, (longest + 2).clamp(12, 50).toDouble());
+    }
+
+    onProgress?.call('Saving file...', fraction: 0.85);
+
+    final bytes = excel.save();
+    if (bytes == null) {
+      throw Exception('Failed to build Excel workbook.');
+    }
+
+    final safeName = fileName.endsWith('.xlsx') ? fileName : '$fileName.xlsx';
+
+    await _saveAndShare(
+      Uint8List.fromList(bytes),
+      safeName,
+      mimeType:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      shareText: '${records.length} metadata records',
+    );
+
+    onProgress?.call('Done.', fraction: 1.0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // DATA DOWNLOAD (ZIP)
   // ---------------------------------------------------------------------------
 
   static Future<void> downloadDataZip({
     required List<int> ids,
     required String title,
+    ProgressCallback? onProgress,
   }) async {
     if (ids.isEmpty) {
       throw Exception('No file ids provided.');
     }
+
+    onProgress?.call(
+      'Requesting archive (${ids.length} files)...',
+      fraction: 0.05,
+    );
 
     final uri = Uri.parse('${AppConstants.myAPILink}/api/data/download/');
     final bodyJson = jsonEncode({
       'ids': ids,
       'title': title.isEmpty ? 'download' : title,
     });
-
-    // ignore: avoid_print
-    print('>> POST $uri body=$bodyJson');
 
     final http.Response response;
     try {
@@ -192,20 +326,10 @@ class DownloadService {
             },
             body: bodyJson,
           )
-          .timeout(const Duration(seconds: 120));
+          .timeout(const Duration(seconds: 300));
     } catch (e) {
-      // ignore: avoid_print
-      print('!! POST failed: $e');
       throw Exception('Network error while downloading: $e');
     }
-
-    // ignore: avoid_print
-    print(
-      '<< POST ${response.statusCode} '
-      'content-type=${response.headers['content-type']} '
-      'content-disposition=${response.headers['content-disposition']} '
-      'bytes=${response.bodyBytes.length}',
-    );
 
     if (response.statusCode != 200) {
       String serverMsg = response.body;
@@ -214,15 +338,11 @@ class DownloadService {
         if (decoded is Map && decoded['error'] != null) {
           serverMsg = decoded['error'].toString();
         }
-      } catch (_) {
-        // Not JSON.
-      }
-
-      // ignore: avoid_print
-      print('!! POST error body: $serverMsg');
-
+      } catch (_) {}
       throw Exception('Download failed (${response.statusCode}): $serverMsg');
     }
+
+    onProgress?.call('Received archive, saving...', fraction: 0.75);
 
     final fileName =
         _filenameFromHeaders(response.headers['content-disposition']) ??
@@ -237,10 +357,12 @@ class DownloadService {
       mimeType: mimeType,
       shareText: title.isEmpty ? 'Data file' : title,
     );
+
+    onProgress?.call('Done.', fraction: 1.0);
   }
 
   // ---------------------------------------------------------------------------
-  // GEOCODE EXPORT (matches GeocodeDownload.jsx -> Excel)
+  // GEOCODE EXPORT
   // ---------------------------------------------------------------------------
 
   static Future<void> downloadGeocodeExcel({
@@ -249,7 +371,10 @@ class DownloadService {
     required List<List<String>> rows,
     required Set<int> codeColumns,
     required String fileName,
+    ProgressCallback? onProgress,
   }) async {
+    onProgress?.call('Building workbook...', fraction: 0.1);
+
     final excel = Excel.createExcel();
     final safeSheet = _sanitizeSheetName(sheetName);
 
@@ -259,11 +384,8 @@ class DownloadService {
     }
     final sheet = excel[safeSheet];
 
-    // Header row.
     sheet.appendRow(headers.map((h) => TextCellValue(h)).toList());
 
-    // Data rows. All cells are text, which matches the web's aoa_to_sheet
-    // behaviour for these columns and keeps leading zeroes on codes.
     for (final row in rows) {
       final padded = List<String>.generate(
         headers.length,
@@ -272,21 +394,17 @@ class DownloadService {
       sheet.appendRow(padded.map((v) => TextCellValue(v)).toList());
     }
 
-    // Column widths — same "longest value + 2, min 12, max 42" rule the
-    // web uses, computed over headers + rows.
-    // NOTE: setColumnWidth expects a double; the clamp() call on an int
-    // returns a num, so we explicitly .toDouble() it.
     for (int c = 0; c < headers.length; c++) {
       int longest = headers[c].length;
       for (final row in rows) {
-        if (c < row.length) {
-          final l = row[c].length;
-          if (l > longest) longest = l;
+        if (c < row.length && row[c].length > longest) {
+          longest = row[c].length;
         }
       }
-      final double width = (longest + 2).clamp(12, 42).toDouble();
-      sheet.setColumnWidth(c, width);
+      sheet.setColumnWidth(c, (longest + 2).clamp(12, 42).toDouble());
     }
+
+    onProgress?.call('Saving file...', fraction: 0.85);
 
     final bytes = excel.save();
     if (bytes == null) {
@@ -304,7 +422,13 @@ class DownloadService {
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       shareText: sheetName,
     );
+
+    onProgress?.call('Done.', fraction: 1.0);
   }
+
+  // ---------------------------------------------------------------------------
+  // HELPERS
+  // ---------------------------------------------------------------------------
 
   static Future<void> _saveAndShare(
     Uint8List bytes,
@@ -331,7 +455,6 @@ class DownloadService {
   }
 
   static String _sanitizeSheetName(String name) {
-    // Excel sheet names: max 31 chars, cannot contain \ / ? * [ ] :
     var cleaned = name.replaceAll(RegExp(r'[\\/?*\[\]:]'), ' ').trim();
     if (cleaned.isEmpty) cleaned = 'Geocode';
     return cleaned.length > 31 ? cleaned.substring(0, 31) : cleaned;

@@ -1,12 +1,16 @@
-import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'package:http/http.dart' as http;
+// lib/screens/Organization/organization_metadata_tab.dart
 import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
+
 import '../../../api/Organization/organization_api.dart';
-import 'package:bgisp/models/ThematicArea/thematic_area.dart';
 import '../../../constants/constant.dart';
-import '../../../providers/language_provider.dart';
 import '../../../models/Metadata/metadata.dart';
+import '../../../models/ThematicArea/thematic_area.dart';
+import '../../../providers/language_provider.dart';
+import '../../../services/download_service.dart';
 import '../../Metadata/metadata_detail_page.dart';
 
 class OrganizationMetadataTab extends StatefulWidget {
@@ -26,10 +30,29 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
   int? _selectedThematicId;
   String _selectedThematicName = '';
   List<MetadataRecord> _metadataRecords = [];
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Option A: keep the raw JSON maps the list endpoint already returned
+  // so Excel export needs NO second network request.
+  // ─────────────────────────────────────────────────────────────────────
+  List<Map<String, dynamic>> _metadataRawById = [];
+
   bool _isLoadingData = false;
   String _searchTerm = '';
   int _currentPage = 0;
   final int _rowsPerPage = 6;
+
+  // Per-card download spinner.
+  int? _downloadingId;
+
+  // Selection (visual only — no bulk action button).
+  bool _selectionMode = false;
+  final Set<int> _selectedIds = {};
+
+  // Progress overlay for the per-card Excel export.
+  bool _busy = false;
+  String _busyMessage = '';
+  double? _busyFraction;
 
   @override
   void initState() {
@@ -60,27 +83,45 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
       _selectedThematicId = thematicId;
       _currentPage = 0;
       _searchTerm = '';
+      _selectionMode = false;
+      _selectedIds.clear();
+      _metadataRawById = [];
     });
+
     try {
       final url =
           '${AppConstants.myAPILink}/api/get_member_organizations/${widget.organizationId}/thematic-area/$thematicId/metadata/';
       final response = await http
           .get(Uri.parse(url))
           .timeout(const Duration(seconds: 30));
+
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
         if (data['success'] == true) {
+          final rawList = (data['metadata'] as List)
+              .map((m) => Map<String, dynamic>.from(m as Map))
+              .toList();
+
           if (mounted) {
             setState(() {
-              _metadataRecords = (data['metadata'] as List)
+              // Parse for the UI.
+              _metadataRecords = rawList
                   .map((m) => MetadataRecord.fromJson(m))
                   .toList();
+              // Keep raw JSON for export — keyed by id for fast lookup.
+              _metadataRawById = rawList;
               _isLoadingData = false;
             });
           }
+        } else {
+          if (mounted) setState(() => _isLoadingData = false);
         }
+      } else {
+        if (mounted) setState(() => _isLoadingData = false);
       }
     } catch (e) {
+      // ignore: avoid_print
+      print('!! [metadata] load failed: $e');
       if (mounted) setState(() => _isLoadingData = false);
     }
   }
@@ -90,6 +131,9 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
       _selectedThematicId = null;
       _selectedThematicName = '';
       _metadataRecords = [];
+      _metadataRawById = [];
+      _selectionMode = false;
+      _selectedIds.clear();
     });
   }
 
@@ -101,6 +145,122 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
       ),
     );
   }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // DOWNLOAD — Option A: no second network call.
+  // ─────────────────────────────────────────────────────────────────────
+
+  String get _language =>
+      Provider.of<LanguageProvider>(context, listen: false).language;
+
+  /// Look up the raw JSON map the list endpoint already returned.
+  Map<String, dynamic>? _rawFor(MetadataRecord r) {
+    for (final m in _metadataRawById) {
+      if (m['id'] == r.id) return m;
+    }
+    return null;
+  }
+
+  /// Minimal fallback if the raw map is somehow missing.
+  Map<String, dynamic> _summaryMap(MetadataRecord r) => {
+    'title': r.title,
+    'contributor': r.contributor,
+    'data_type': r.dataType,
+    'data_volume': r.dataVolume,
+    'organization_name': r.organizationName,
+  };
+
+  Future<void> _downloadSingle(MetadataRecord record) async {
+    setState(() {
+      _downloadingId = record.id;
+      _busy = true;
+      _busyMessage = 'Preparing Excel export...';
+      _busyFraction = null;
+    });
+
+    try {
+      final detail = _rawFor(record) ?? _summaryMap(record);
+      if (detail.isEmpty) {
+        throw Exception('No metadata fields available to export.');
+      }
+
+      // ignore: avoid_print
+      print(
+        '>> [download] exporting id=${record.id} '
+        'fields=${detail.length}',
+      );
+
+      await DownloadService.downloadMetadataExcel(
+        record: detail,
+        language: _language,
+        onProgress: (msg, {fraction}) {
+          if (!mounted) return;
+          setState(() {
+            _busyMessage = msg;
+            _busyFraction = fraction;
+          });
+        },
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Excel exported'),
+            backgroundColor: Color(0xFF10b981),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('!! [download] failed: $e\n$st');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Download failed: $e'),
+            backgroundColor: Colors.red[700],
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _downloadingId = null;
+          _busy = false;
+          _busyMessage = '';
+          _busyFraction = null;
+        });
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // SELECTION (visual only)
+  // ─────────────────────────────────────────────────────────────────────
+
+  void _toggleSelection(MetadataRecord record) {
+    setState(() {
+      if (!_selectionMode) _selectionMode = true;
+      if (_selectedIds.contains(record.id)) {
+        _selectedIds.remove(record.id);
+        if (_selectedIds.isEmpty) _selectionMode = false;
+      } else {
+        _selectedIds.add(record.id);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // FILTER / PAGING
+  // ─────────────────────────────────────────────────────────────────────
 
   List<MetadataRecord> get _filteredRecords {
     if (_searchTerm.isEmpty) return _metadataRecords;
@@ -116,6 +276,7 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
   }
 
   int get _totalPages => (_filteredRecords.length / _rowsPerPage).ceil();
+
   List<MetadataRecord> get _currentPageData {
     final start = _currentPage * _rowsPerPage;
     final end = start + _rowsPerPage;
@@ -161,6 +322,10 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
     return colors[name] ?? const Color(0xFF64748b);
   }
 
+  // ─────────────────────────────────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     final langProvider = Provider.of<LanguageProvider>(context);
@@ -179,8 +344,62 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
       );
     }
 
-    if (_selectedThematicId != null) return _buildRecordsView();
+    final body = _selectedThematicId != null
+        ? _buildRecordsView()
+        : _buildThematicGrid(isBangla);
 
+    return PopScope(
+      canPop: _selectedThematicId == null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selectedThematicId != null) {
+          if (_selectionMode) {
+            _clearSelection();
+          } else {
+            _goBackToThematicAreas();
+          }
+        }
+      },
+      child: Stack(children: [body, if (_busy) _buildProgressOverlay()]),
+    );
+  }
+
+  Widget _buildProgressOverlay() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withOpacity(0.35),
+        child: Center(
+          child: Card(
+            margin: const EdgeInsets.symmetric(horizontal: 40),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: CircularProgressIndicator(strokeWidth: 3),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    _busyMessage,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  if (_busyFraction != null) ...[
+                    const SizedBox(height: 10),
+                    LinearProgressIndicator(value: _busyFraction),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildThematicGrid(bool isBangla) {
     if (_thematicAreas.isEmpty) {
       return Center(
         child: Column(
@@ -202,7 +421,6 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
       );
     }
 
-    // Original thematic area design
     return Padding(
       padding: const EdgeInsets.all(16),
       child: GridView.builder(
@@ -338,42 +556,14 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
     );
   }
 
-  // Records view matching React records-grid styling
   Widget _buildRecordsView() {
     final color = _getColorForThematicArea(_selectedThematicName);
+
     return Column(
       children: [
-        // Header
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          color: color.withOpacity(0.05),
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.arrow_back, size: 20),
-                onPressed: _goBackToThematicAreas,
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  _selectedThematicName,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: color,
-                  ),
-                ),
-              ),
-              Text(
-                '${_filteredRecords.length} records',
-                style: TextStyle(color: Colors.grey[600], fontSize: 13),
-              ),
-            ],
-          ),
-        ),
-        // Search
+        // Search row — no back arrow, no count pill.
         Padding(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
           child: TextField(
             decoration: InputDecoration(
               hintText: 'Search metadata...',
@@ -409,7 +599,8 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
             }),
           ),
         ),
-        // Records List - Full width cards
+
+        // Records list
         Expanded(
           child: _isLoadingData
               ? const Center(child: CircularProgressIndicator())
@@ -422,6 +613,7 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
                       _buildRecordCard(_currentPageData[index], color),
                 ),
         ),
+
         // Pagination
         if (_totalPages > 1)
           Container(
@@ -457,19 +649,24 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
     );
   }
 
-  // Record card matching React .record-card styling
   Widget _buildRecordCard(MetadataRecord record, Color color) {
+    final isSelected = _selectedIds.contains(record.id);
+    final isDownloading = _downloadingId == record.id;
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       elevation: 4,
       shadowColor: color.withOpacity(0.15),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: isSelected ? BorderSide(color: color, width: 2) : BorderSide.none,
+      ),
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
+          // Card content
           Column(
             children: [
-              // Gradient header matching .card-gradient
               Container(
                 height: 90,
                 decoration: BoxDecoration(
@@ -495,7 +692,6 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
                   ),
                 ),
               ),
-              // Card body matching .card-body
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -591,12 +787,20 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
               ),
             ],
           ),
-          // Hover overlay matching .card-hover
+
+          // Tap overlay (details / long-press selection)
           Positioned.fill(
             child: Material(
               color: Colors.transparent,
               child: InkWell(
-                onTap: () => _viewMetadataDetail(record),
+                onTap: () {
+                  if (_selectionMode) {
+                    _toggleSelection(record);
+                  } else {
+                    _viewMetadataDetail(record);
+                  }
+                },
+                onLongPress: () => _toggleSelection(record),
                 splashColor: Colors.black26,
                 highlightColor: Colors.black12,
                 child: const Center(
@@ -617,6 +821,64 @@ class _OrganizationMetadataTabState extends State<OrganizationMetadataTab> {
                   ),
                 ),
               ),
+            ),
+          ),
+
+          // Selection checkbox (visual only)
+          Positioned(
+            top: 8,
+            left: 8,
+            child: GestureDetector(
+              onTap: () => _toggleSelection(record),
+              child: Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: isSelected ? color : Colors.white.withOpacity(0.9),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isSelected ? color : Colors.grey[400]!,
+                    width: 1.5,
+                  ),
+                ),
+                child: Icon(
+                  isSelected ? Icons.check : Icons.add,
+                  size: 15,
+                  color: isSelected ? Colors.white : Colors.grey[600],
+                ),
+              ),
+            ),
+          ),
+
+          // Per-card download button
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Material(
+              color: Colors.white,
+              shape: const CircleBorder(),
+              elevation: 2,
+              child: isDownloading
+                  ? const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Color(0xFFe67e22),
+                        ),
+                      ),
+                    )
+                  : IconButton(
+                      iconSize: 18,
+                      tooltip: 'Download Excel',
+                      icon: const Icon(
+                        Icons.download,
+                        color: Color(0xFFe67e22),
+                      ),
+                      onPressed: () => _downloadSingle(record),
+                    ),
             ),
           ),
         ],
