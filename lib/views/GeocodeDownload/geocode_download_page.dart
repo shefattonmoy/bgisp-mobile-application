@@ -1,20 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
-
 import '../../constants/constant.dart';
 import '../../services/download_service.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants — ported 1:1 from GeocodeDownload.jsx
-// ─────────────────────────────────────────────────────────────────────────────
-
 const LatLng _bdCenter = LatLng(23.9836, 90.5837);
-const double _bdZoom = 7.0;
+const double _bdZoom = 6.5;
 const int _maxFeatureExport = 20000;
 
 const List<Map<String, String>> _adminLevels = [
@@ -39,8 +33,6 @@ const Map<String, String> _levelToLayerId = {
   '8': 'village',
 };
 
-// HIGHLIGHT_SYMBOLS → Flutter Colors (fill colour, outline colour).
-// ArcGIS uses RGBA; here we use solid + semi-transparent fill.
 const Map<String, Color> _highlightFill = {
   'division': Color(0x1F3B82F6),
   'district': Color(0x2410B981),
@@ -82,8 +74,6 @@ const List<Map<String, String>> _basemaps = [
   },
 ];
 
-// EXCEL_ADMIN_COLUMNS — exactly the same 16, in the same order.
-// minLevel = the level at which this column starts appearing.
 class _ExcelColumn {
   final String header;
   final List<String> keys;
@@ -243,10 +233,6 @@ const List<_ExcelColumn> _excelColumns = [
   ),
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
 String _layerIdForLevel(String levelValue) =>
     _levelToLayerId[levelValue] ?? levelValue;
 
@@ -257,8 +243,6 @@ String _clean(dynamic v) {
   return v.toString().trim();
 }
 
-// Reads an attribute trying each key (case-insensitive fallback), returns
-// the string value or ''.
 String _attr(Map<String, dynamic> attrs, List<String> keys) {
   if (keys.isEmpty) return '';
   final lower = <String, dynamic>{};
@@ -290,10 +274,6 @@ bool _isOtherArea(Map<String, dynamic>? option) {
           name.contains('other'));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Page
-// ─────────────────────────────────────────────────────────────────────────────
-
 class GeocodeDownloadPage extends StatefulWidget {
   const GeocodeDownloadPage({super.key});
 
@@ -309,7 +289,6 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
   Map<String, String> _layerUrls = {};
   Map<String, String> _layerTitles = {};
 
-  // Dropdown data.
   List<Map<String, dynamic>> _divisions = [];
   List<Map<String, dynamic>> _districts = [];
   List<Map<String, dynamic>> _cityCorporations = [];
@@ -319,8 +298,6 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
   List<Map<String, dynamic>> _mauzas = [];
   List<Map<String, dynamic>> _villages = [];
 
-  // Selected options (each is the raw dict from the API, with `label`,
-  // `geo_code`, `value`, etc.).
   Map<String, dynamic>? _selDivision;
   Map<String, dynamic>? _selDistrict;
   Map<String, dynamic>? _selCityCorp;
@@ -338,9 +315,12 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
 
   String _basemapKey = 'topo';
   bool _basemapMenuOpen = false;
+  bool _filterPanelOpen = true;
+  bool _showCoords = false;
+  LatLng? _cursorLatLng;
 
-  // Filter polygons currently rendered on the map.
   List<List<LatLng>> _highlightPolygons = [];
+  String _symbolKeyForHighlight = 'division';
 
   int get _levelNumber => int.tryParse(_levelValue) ?? 1;
 
@@ -372,16 +352,31 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
     return 'Division';
   }
 
+  // ── Dedupe helper (by stable key) ────────────────────────────────────────
+
+  List<Map<String, dynamic>> _dedupe(
+    List<Map<String, dynamic>> list,
+    String keyField,
+  ) {
+    final seen = <String>{};
+    final out = <Map<String, dynamic>>[];
+    for (final m in list) {
+      final k = _clean(m[keyField]);
+      if (k.isEmpty) {
+        out.add(m); // keep entries with empty key but don't dedupe on them
+        continue;
+      }
+      if (seen.add(k)) out.add(m);
+    }
+    return out;
+  }
+
   @override
   void initState() {
     super.initState();
     _fetchLayerConfig();
     _fetchDivisions();
   }
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // HTTP helpers
-  // ──────────────────────────────────────────────────────────────────────────
 
   Uri _api(String path, [Map<String, String>? q]) {
     final base = '${AppConstants.myAPILink}$path';
@@ -407,10 +402,6 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
     return const [];
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Layer config (ArcGIS FeatureLayer URLs per level)
-  // ──────────────────────────────────────────────────────────────────────────
-
   Future<void> _fetchLayerConfig() async {
     setState(() => _layerConfigLoaded = false);
     try {
@@ -434,7 +425,6 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
         titles[layerId] = title.isEmpty
             ? '${layerId.replaceAll('_', ' ')} Boundary'
             : title;
-        // Mirror numeric levels.
         _levelToLayerId.forEach((level, mapped) {
           if (mapped == layerId) {
             urls[level] = url;
@@ -498,10 +488,6 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Dropdown fetchers (same endpoints as web)
-  // ──────────────────────────────────────────────────────────────────────────
-
   Future<void> _fetchDivisions({String search = ''}) async {
     try {
       final data = await _getList('/api/get_divisions_geocode_filter/', {
@@ -509,18 +495,21 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       });
       if (!mounted) return;
       setState(() {
-        _divisions = data
-            .map(
-              (item) => <String, dynamic>{
-                'id': item['division_id'],
-                'value': _clean(item['division_code']),
-                'label':
-                    '${_clean(item['division_name'])} (${_clean(item['division_geo_code'])})',
-                'name': _clean(item['division_name']),
-                'geo_code': _clean(item['division_geo_code']),
-              },
-            )
-            .toList();
+        _divisions = _dedupe(
+          data
+              .map(
+                (item) => <String, dynamic>{
+                  'id': item['division_id'],
+                  'value': _clean(item['division_code']),
+                  'label':
+                      '${_clean(item['division_name'])} (${_clean(item['division_geo_code'])})',
+                  'name': _clean(item['division_name']),
+                  'geo_code': _clean(item['division_geo_code']),
+                },
+              )
+              .toList(),
+          'geo_code',
+        );
       });
     } catch (_) {
       if (!mounted) return;
@@ -536,19 +525,22 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       });
       if (!mounted) return;
       setState(() {
-        _districts = data
-            .map(
-              (item) => <String, dynamic>{
-                'id': item['district_id'],
-                'value': _clean(item['district_code']),
-                'label':
-                    '${_clean(item['district_name'])} (${_clean(item['district_code'])})',
-                'name': _clean(item['district_name']),
-                'geo_code': _clean(item['district_geo_code']),
-                'division_geo_code': divisionGeo,
-              },
-            )
-            .toList();
+        _districts = _dedupe(
+          data
+              .map(
+                (item) => <String, dynamic>{
+                  'id': item['district_id'],
+                  'value': _clean(item['district_code']),
+                  'label':
+                      '${_clean(item['district_name'])} (${_clean(item['district_code'])})',
+                  'name': _clean(item['district_name']),
+                  'geo_code': _clean(item['district_geo_code']),
+                  'division_geo_code': divisionGeo,
+                },
+              )
+              .toList(),
+          'geo_code',
+        );
       });
     } catch (_) {
       if (!mounted) return;
@@ -568,22 +560,29 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       });
       if (!mounted) return;
       setState(() {
-        _cityCorporations = data.map((item) {
-          final geo = _clean(
-            item['city_geo_code'] ?? item['city_corporation_geo_code'],
-          );
-          final isOther = item['is_other_area'] == true;
-          return <String, dynamic>{
-            'id': item['city_id'] ?? item['city_corporation_id'],
-            'value': _clean(item['city_code'] ?? item['city_corporation_code']),
-            'label':
-                '${_clean(item['city_name'] ?? item['city_corporation_name'])} ($geo)',
-            'name': _clean(item['city_name'] ?? item['city_corporation_name']),
-            'geo_code': geo,
-            'is_other_area': isOther,
-            'district_geo_code': districtGeo,
-          };
-        }).toList();
+        _cityCorporations = _dedupe(
+          data.map((item) {
+            final geo = _clean(
+              item['city_geo_code'] ?? item['city_corporation_geo_code'],
+            );
+            final isOther = item['is_other_area'] == true;
+            return <String, dynamic>{
+              'id': item['city_id'] ?? item['city_corporation_id'],
+              'value': _clean(
+                item['city_code'] ?? item['city_corporation_code'],
+              ),
+              'label':
+                  '${_clean(item['city_name'] ?? item['city_corporation_name'])} ($geo)',
+              'name': _clean(
+                item['city_name'] ?? item['city_corporation_name'],
+              ),
+              'geo_code': geo,
+              'is_other_area': isOther,
+              'district_geo_code': districtGeo,
+            };
+          }).toList(),
+          'geo_code',
+        );
       });
     } catch (_) {
       if (!mounted) return;
@@ -599,20 +598,23 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       });
       if (!mounted) return;
       setState(() {
-        _upazilas = data
-            .map(
-              (item) => <String, dynamic>{
-                'id': item['upazila_id'],
-                'value': _clean(item['upazila_code']),
-                'label':
-                    '${_clean(item['upazila_name'])} (${_clean(item['upazila_code'])})',
-                'name': _clean(item['upazila_name']),
-                'geo_code': _clean(item['upazila_geo_code']),
-                'district_geo_code': districtGeo,
-                'is_city_corporation': item['is_city_corporation'],
-              },
-            )
-            .toList();
+        _upazilas = _dedupe(
+          data
+              .map(
+                (item) => <String, dynamic>{
+                  'id': item['upazila_id'],
+                  'value': _clean(item['upazila_code']),
+                  'label':
+                      '${_clean(item['upazila_name'])} (${_clean(item['upazila_code'])})',
+                  'name': _clean(item['upazila_name']),
+                  'geo_code': _clean(item['upazila_geo_code']),
+                  'district_geo_code': districtGeo,
+                  'is_city_corporation': item['is_city_corporation'],
+                },
+              )
+              .toList(),
+          'geo_code',
+        );
       });
     } catch (_) {
       if (!mounted) return;
@@ -641,20 +643,23 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       final data = await _getList('/api/get_upazilas_geocode_filter/', params);
       if (!mounted) return;
       setState(() {
-        _upazilas = data
-            .map(
-              (item) => <String, dynamic>{
-                'id': item['upazila_id'],
-                'value': _clean(item['upazila_code']),
-                'label':
-                    '${_clean(item['upazila_name'])} (${_clean(item['upazila_code'])})',
-                'name': _clean(item['upazila_name']),
-                'geo_code': _clean(item['upazila_geo_code']),
-                'district_geo_code': districtGeo,
-                'is_city_corporation': item['is_city_corporation'],
-              },
-            )
-            .toList();
+        _upazilas = _dedupe(
+          data
+              .map(
+                (item) => <String, dynamic>{
+                  'id': item['upazila_id'],
+                  'value': _clean(item['upazila_code']),
+                  'label':
+                      '${_clean(item['upazila_name'])} (${_clean(item['upazila_code'])})',
+                  'name': _clean(item['upazila_name']),
+                  'geo_code': _clean(item['upazila_geo_code']),
+                  'district_geo_code': districtGeo,
+                  'is_city_corporation': item['is_city_corporation'],
+                },
+              )
+              .toList(),
+          'geo_code',
+        );
       });
     } catch (_) {
       if (!mounted) return;
@@ -674,19 +679,22 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       });
       if (!mounted) return;
       setState(() {
-        _municipalities = data.map((item) {
-          final geo = _clean(item['municipality_geo_code']);
-          return <String, dynamic>{
-            'id': item['municipality_id'],
-            'value': _clean(item['municipality_code']),
-            'label':
-                '${_clean(item['municipality_name'])} (${_clean(item['municipality_code'])})',
-            'name': _clean(item['municipality_name']),
-            'geo_code': geo,
-            'is_other_area': item['is_other_area'] == true,
-            'upazila_geo_code': upazilaGeo,
-          };
-        }).toList();
+        _municipalities = _dedupe(
+          data.map((item) {
+            final geo = _clean(item['municipality_geo_code']);
+            return <String, dynamic>{
+              'id': item['municipality_id'],
+              'value': _clean(item['municipality_code']),
+              'label':
+                  '${_clean(item['municipality_name'])} (${_clean(item['municipality_code'])})',
+              'name': _clean(item['municipality_name']),
+              'geo_code': geo,
+              'is_other_area': item['is_other_area'] == true,
+              'upazila_geo_code': upazilaGeo,
+            };
+          }).toList(),
+          'geo_code',
+        );
       });
     } catch (_) {
       if (!mounted) return;
@@ -702,22 +710,25 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       });
       if (!mounted) return;
       setState(() {
-        _unions = data
-            .map(
-              (item) => <String, dynamic>{
-                'id': item['union_id'],
-                'value': _clean(item['union_code'] ?? item['uni_code']),
-                'label':
-                    '${_clean(item['union_name'] ?? item['uni_name'])} (${_clean(item['union_code'] ?? item['uni_code'])})',
-                'name': _clean(item['union_name'] ?? item['uni_name']),
-                'geo_code': _clean(
-                  item['union_geo_code'] ?? item['uni_geo_code'],
-                ),
-                'upazila_geo_code': upazilaGeo,
-                'is_municipality': item['is_municipality'],
-              },
-            )
-            .toList();
+        _unions = _dedupe(
+          data
+              .map(
+                (item) => <String, dynamic>{
+                  'id': item['union_id'],
+                  'value': _clean(item['union_code'] ?? item['uni_code']),
+                  'label':
+                      '${_clean(item['union_name'] ?? item['uni_name'])} (${_clean(item['union_code'] ?? item['uni_code'])})',
+                  'name': _clean(item['union_name'] ?? item['uni_name']),
+                  'geo_code': _clean(
+                    item['union_geo_code'] ?? item['uni_geo_code'],
+                  ),
+                  'upazila_geo_code': upazilaGeo,
+                  'is_municipality': item['is_municipality'],
+                },
+              )
+              .toList(),
+          'geo_code',
+        );
       });
     } catch (_) {
       if (!mounted) return;
@@ -747,21 +758,24 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       final data = await _getList('/api/get_unions_geocode_filter/', params);
       if (!mounted) return;
       setState(() {
-        _unions = data
-            .map(
-              (item) => <String, dynamic>{
-                'id': item['union_id'],
-                'value': _clean(item['union_code'] ?? item['uni_code']),
-                'label':
-                    '${_clean(item['union_name'] ?? item['uni_name'])} (${_clean(item['union_code'] ?? item['uni_code'])})',
-                'name': _clean(item['union_name'] ?? item['uni_name']),
-                'geo_code': _clean(
-                  item['union_geo_code'] ?? item['uni_geo_code'],
-                ),
-                'upazila_geo_code': upazilaGeo,
-              },
-            )
-            .toList();
+        _unions = _dedupe(
+          data
+              .map(
+                (item) => <String, dynamic>{
+                  'id': item['union_id'],
+                  'value': _clean(item['union_code'] ?? item['uni_code']),
+                  'label':
+                      '${_clean(item['union_name'] ?? item['uni_name'])} (${_clean(item['union_code'] ?? item['uni_code'])})',
+                  'name': _clean(item['union_name'] ?? item['uni_name']),
+                  'geo_code': _clean(
+                    item['union_geo_code'] ?? item['uni_geo_code'],
+                  ),
+                  'upazila_geo_code': upazilaGeo,
+                },
+              )
+              .toList(),
+          'geo_code',
+        );
       });
     } catch (_) {
       if (!mounted) return;
@@ -777,21 +791,24 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       });
       if (!mounted) return;
       setState(() {
-        _mauzas = data
-            .map(
-              (item) => <String, dynamic>{
-                'id': item['mauza_id'] ?? item['muz_id'],
-                'value': _clean(item['mauza_code'] ?? item['muz_code']),
-                'label':
-                    '${_clean(item['mauza_name'] ?? item['muz_name'])} (${_clean(item['mauza_code'] ?? item['muz_code'])})',
-                'name': _clean(item['mauza_name'] ?? item['muz_name']),
-                'geo_code': _clean(
-                  item['mauza_geo_code'] ?? item['muz_geo_code'],
-                ),
-                'union_geo_code': unionGeo,
-              },
-            )
-            .toList();
+        _mauzas = _dedupe(
+          data
+              .map(
+                (item) => <String, dynamic>{
+                  'id': item['mauza_id'] ?? item['muz_id'],
+                  'value': _clean(item['mauza_code'] ?? item['muz_code']),
+                  'label':
+                      '${_clean(item['mauza_name'] ?? item['muz_name'])} (${_clean(item['mauza_code'] ?? item['muz_code'])})',
+                  'name': _clean(item['mauza_name'] ?? item['muz_name']),
+                  'geo_code': _clean(
+                    item['mauza_geo_code'] ?? item['muz_geo_code'],
+                  ),
+                  'union_geo_code': unionGeo,
+                },
+              )
+              .toList(),
+          'geo_code',
+        );
       });
     } catch (_) {
       if (!mounted) return;
@@ -807,21 +824,24 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       });
       if (!mounted) return;
       setState(() {
-        _villages = data
-            .map(
-              (item) => <String, dynamic>{
-                'id': item['village_id'] ?? item['vilg_id'],
-                'value': _clean(item['village_code'] ?? item['vilg_code']),
-                'label':
-                    '${_clean(item['village_name'] ?? item['vilg_name'])} (${_clean(item['village_code'] ?? item['vilg_code'])})',
-                'name': _clean(item['village_name'] ?? item['vilg_name']),
-                'geo_code': _clean(
-                  item['village_geo_code'] ?? item['vilg_geo_code'],
-                ),
-                'mauza_geo_code': mauzaGeo,
-              },
-            )
-            .toList();
+        _villages = _dedupe(
+          data
+              .map(
+                (item) => <String, dynamic>{
+                  'id': item['village_id'] ?? item['vilg_id'],
+                  'value': _clean(item['village_code'] ?? item['vilg_code']),
+                  'label':
+                      '${_clean(item['village_name'] ?? item['vilg_name'])} (${_clean(item['village_code'] ?? item['vilg_code'])})',
+                  'name': _clean(item['village_name'] ?? item['vilg_name']),
+                  'geo_code': _clean(
+                    item['village_geo_code'] ?? item['vilg_geo_code'],
+                  ),
+                  'mauza_geo_code': mauzaGeo,
+                },
+              )
+              .toList(),
+          'geo_code',
+        );
       });
     } catch (_) {
       if (!mounted) return;
@@ -829,14 +849,9 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Filter selection handlers
-  // ──────────────────────────────────────────────────────────────────────────
-
   void _clearBelow(int fromLevel) {
     if (fromLevel <= 1) {
       _selDivision = null;
-      _divisions = _divisions;
     }
     if (fromLevel <= 2) {
       _selDistrict = null;
@@ -1092,13 +1107,7 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
     await _applyFilter('village_geo_code', geo, 'village');
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // ArcGIS query + map rendering
-  // ──────────────────────────────────────────────────────────────────────────
-
-  /// Returns the current filter's where clause + a symbol-key for colour.
   (String, String) get _currentWhere {
-    // Walk deepest → shallowest selection, matching the web behaviour.
     if (_selVillage != null && _clean(_selVillage!['geo_code']).isNotEmpty) {
       return (
         "village_geo_code = '${_escapeSql(_clean(_selVillage!['geo_code']))}'",
@@ -1159,8 +1168,6 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
   }
 
   Uri _arcgisQueryUrl(String layerUrl) {
-    // FeatureServer base can be "…/FeatureServer" or "…/FeatureServer/0".
-    // The web JS SDK appends "/query" to whatever the layer URL is.
     final base = layerUrl.endsWith('/query') ? layerUrl : '$layerUrl/query';
     return Uri.parse(base);
   }
@@ -1197,7 +1204,6 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
   ) async {
     final attrs = <Map<String, dynamic>>[];
 
-    // First try returnIdsOnly for accurate chunking.
     final idResp = await _arcgisPost(layerUrl, {
       'f': 'json',
       'where': where,
@@ -1298,7 +1304,6 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       });
 
       if (polygons.isNotEmpty) {
-        // Fit to the polygon bounds.
         double minLat = polygons.first.first.latitude;
         double maxLat = polygons.first.first.latitude;
         double minLon = polygons.first.first.longitude;
@@ -1317,7 +1322,7 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
               LatLng(minLat, minLon),
               LatLng(maxLat, maxLon),
             ),
-            padding: const EdgeInsets.all(40),
+            padding: const EdgeInsets.all(60),
           ),
         );
       }
@@ -1330,14 +1335,9 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
     }
   }
 
-  String _symbolKeyForHighlight = 'division';
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // Reset
-  // ──────────────────────────────────────────────────────────────────────────
-
   Future<void> _resetAll() async {
     setState(() {
+      // Data
       _selDivision = null;
       _selDistrict = null;
       _selCityCorp = null;
@@ -1356,6 +1356,12 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       _highlightPolygons = [];
       _featureCount = 0;
       _error = null;
+
+      // UI — restore the floating panel to its open state
+      _filterPanelOpen = true;
+      _basemapMenuOpen = false;
+      _showCoords = false;
+      _cursorLatLng = null;
     });
     _mapController.move(_bdCenter, _bdZoom);
     await _fetchDivisions();
@@ -1364,10 +1370,6 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
   Future<void> _fullExtent() async {
     _mapController.move(_bdCenter, _bdZoom);
   }
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // Excel download
-  // ──────────────────────────────────────────────────────────────────────────
 
   Future<void> _downloadExcel() async {
     final url = _layerUrl;
@@ -1420,7 +1422,6 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
         rows.add(row);
       }
 
-      // Code columns are 1..columns.length (0 is Serial No).
       final codeColumns = <int>{};
       for (int i = 0; i < columns.length; i++) {
         if (columns[i].isCode) {
@@ -1480,377 +1481,553 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // Build
+  // BUILD
   // ──────────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final isWide = MediaQuery.of(context).size.width >= 900;
-
     return Scaffold(
-      backgroundColor: const Color(0xFFEEF2F7),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0F2647),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: const Text('Geocode Download'),
-      ),
-      body: SafeArea(child: isWide ? _buildWideLayout() : _buildNarrowLayout()),
-    );
-  }
-
-  Widget _buildWideLayout() {
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.08),
-                blurRadius: 24,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SizedBox(width: 420, child: _buildFilterPanel()),
-              const VerticalDivider(width: 1),
-              Expanded(child: _buildMapPanel()),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNarrowLayout() {
-    return Container(
-      color: Colors.white,
-      child: Column(
+      backgroundColor: const Color(0xFF0F172A),
+      body: Stack(
         children: [
-          Expanded(flex: 5, child: _buildFilterPanel()),
-          const Divider(height: 1),
-          Expanded(flex: 4, child: _buildMapPanel()),
+          Positioned.fill(child: _buildMapPanel()),
+          Positioned(top: 0, left: 0, right: 0, child: _buildTopBar()),
+          Positioned(
+            top: 76,
+            right: 16,
+            child: _buildFloatingFilterPanel(context),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildFilterPanel() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Container(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Color(0xFF102A4C), Color(0xFF1D4ED8), Color(0xFF4F46E5)],
+  // ── Top bar ───────────────────────────────────────────────────────────────
+
+  Widget _buildTopBar() {
+    return Container(
+      padding: EdgeInsets.fromLTRB(
+        16,
+        MediaQuery.of(context).padding.top + 10,
+        16,
+        12,
+      ),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xE60F172A), Color(0x000F172A)],
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
+              ),
+              borderRadius: BorderRadius.circular(9),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.25),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: const Icon(Icons.map, color: Colors.white, size: 18),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Geocode Download',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+                SizedBox(height: 1),
+                Text(
+                  'Bangladesh Administrative Boundary',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Color(0xFFCBD5E1),
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
             ),
           ),
-          child: Row(
-            children: [
-              const Icon(Icons.tune, color: Colors.white, size: 20),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Filter Options',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 15,
+          const SizedBox(width: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.15)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: _layerConfigLoaded
+                        ? const Color(0xFF22C55E)
+                        : const Color(0xFFF59E0B),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color:
+                            (_layerConfigLoaded
+                                    ? const Color(0xFF22C55E)
+                                    : const Color(0xFFF59E0B))
+                                .withOpacity(0.6),
+                        blurRadius: 6,
                       ),
-                    ),
-                    SizedBox(height: 2),
-                    Text(
-                      'Select administrative level and narrow the boundary data',
-                      style: TextStyle(color: Colors.white70, fontSize: 11),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  '$_featureCount ready',
+                const SizedBox(width: 6),
+                Text(
+                  _layerConfigLoaded ? 'Layers ready' : 'Loading layers…',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
+        ],
+      ),
+    );
+  }
+
+  // ── Floating filter panel (AnimatedSize + ClipRRect = no overflow) ────────
+
+  Widget _buildFloatingFilterPanel(BuildContext context) {
+    final maxHeight = MediaQuery.of(context).size.height - 120;
+    final panelWidth = MediaQuery.of(context).size.width < 600 ? 270.0 : 300.0;
+    const collapsedWidth = 48.0;
+
+    return Material(
+      elevation: 14,
+      borderRadius: BorderRadius.circular(12),
+      color: Colors.transparent,
+      child: Container(
+        width: _filterPanelOpen ? panelWidth : collapsedWidth,
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.18),
+              blurRadius: 22,
+              offset: const Offset(0, 8),
+            ),
+          ],
         ),
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(14),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topRight,
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _levelDropdown(),
-                const SizedBox(height: 12),
-                const Text(
-                  'Administrative Area',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF64748B),
-                    letterSpacing: 0.6,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                if (_showDivision)
-                  _filterDropdown(
-                    label: 'Division',
-                    icon: Icons.public,
-                    value: _selDivision,
-                    options: _divisions,
-                    onChanged: _onDivisionChanged,
-                  ),
-                if (_showDistrict)
-                  _filterDropdown(
-                    label: 'District',
-                    icon: Icons.map,
-                    value: _selDistrict,
-                    options: _districts,
-                    enabled: _selDivision != null,
-                    placeholder: _selDivision != null
-                        ? 'Select District…'
-                        : 'Select division first',
-                    onChanged: _onDistrictChanged,
-                  ),
-                if (_showCity)
-                  _filterDropdown(
-                    label: 'City Corporation',
-                    icon: Icons.location_city,
-                    value: _selCityCorp,
-                    options: _cityCorporations,
-                    enabled: _selDistrict != null,
-                    placeholder: _selDistrict != null
-                        ? 'Select City Corporation…'
-                        : 'Select district first',
-                    onChanged: _onCityCorpChanged,
-                  ),
-                if (_showUpazila)
-                  _filterDropdown(
-                    label: 'Upazila',
-                    icon: Icons.apartment,
-                    value: _selUpazila,
-                    options: _upazilas,
-                    enabled: _selDistrict != null,
-                    loading: _loadingUpazila,
-                    placeholder: _selDistrict != null
-                        ? 'Select Upazila…'
-                        : 'Select district first',
-                    onChanged: _onUpazilaChanged,
-                  ),
-                if (_showMunicipality)
-                  _filterDropdown(
-                    label: 'Municipality',
-                    icon: Icons.home_work,
-                    value: _selMunicipality,
-                    options: _municipalities,
-                    enabled: _selUpazila != null,
-                    placeholder: _selUpazila != null
-                        ? 'Select Municipality…'
-                        : 'Select upazila first',
-                    onChanged: _onMunicipalityChanged,
-                  ),
-                if (_showUnion)
-                  _filterDropdown(
-                    label: 'Union',
-                    icon: Icons.layers,
-                    value: _selUnion,
-                    options: _unions,
-                    enabled: _selUpazila != null,
-                    placeholder: _selUpazila != null
-                        ? 'Select Union…'
-                        : 'Select upazila first',
-                    onChanged: _onUnionChanged,
-                  ),
-                if (_showMauza)
-                  _filterDropdown(
-                    label: 'Mauza',
-                    icon: Icons.terrain,
-                    value: _selMauza,
-                    options: _mauzas,
-                    enabled: _selUnion != null,
-                    placeholder: _selUnion != null
-                        ? 'Select Mauza…'
-                        : 'Select union first',
-                    onChanged: _onMauzaChanged,
-                  ),
-                if (_showVillage)
-                  _filterDropdown(
-                    label: 'Village',
-                    icon: Icons.home_work_outlined,
-                    value: _selVillage,
-                    options: _villages,
-                    enabled: _selMauza != null,
-                    placeholder: _selMauza != null
-                        ? 'Select Village…'
-                        : 'Select mauza first',
-                    onChanged: _onVillageChanged,
-                  ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _resetAll,
-                        icon: const Icon(Icons.restart_alt, size: 18),
-                        label: const Text('Reset All Fields'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF475569),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed:
-                            (_downloadLoading ||
-                                !_layerConfigLoaded ||
-                                _featureCount == 0)
-                            ? null
-                            : _downloadExcel,
-                        icon: _downloadLoading
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : const Icon(Icons.cloud_download, size: 18),
-                        label: const Text('Download Excel'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF2563EB),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFEF2F2),
-                      border: Border.all(color: const Color(0xFFFCA5A5)),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(
-                          Icons.error_outline,
-                          color: Color(0xFFDC2626),
-                          size: 16,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            _error!,
-                            style: const TextStyle(
-                              color: Color(0xFFB91C1C),
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                      ],
+                _buildPanelHeader(),
+                if (_filterPanelOpen)
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(8, 2, 8, 8),
+                      child: _buildPanelBody(),
                     ),
                   ),
-                ],
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildPanelHeader() {
+    return Container(
+      height: 40,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF1D4ED8), Color(0xFF2563EB)],
+        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+      ),
+      child: _filterPanelOpen
+          ? Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: ClipRect(
+                child: Row(
+                  children: [
+                    _headerIconButton(
+                      icon: Icons.close,
+                      tooltip: 'Hide filters',
+                      onTap: () => setState(() => _filterPanelOpen = false),
+                    ),
+                    const SizedBox(width: 4),
+                    const Flexible(
+                      child: Text(
+                        'Boundary Filters',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.18),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '$_featureCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : Center(
+              child: _headerIconButton(
+                icon: Icons.tune,
+                tooltip: 'Show filters',
+                onTap: () => setState(() => _filterPanelOpen = true),
+              ),
+            ),
+    );
+  }
+
+  Widget _headerIconButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: SizedBox(
+          width: 32,
+          height: 32,
+          child: Icon(icon, color: Colors.white, size: 17),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPanelBody() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _levelDropdown(),
+        const SizedBox(height: 6),
+        if (_showDivision)
+          _filterDropdown(
+            label: 'Division',
+            icon: Icons.public,
+            value: _selDivision,
+            options: _divisions,
+            onChanged: _onDivisionChanged,
+          ),
+        if (_showDistrict)
+          _filterDropdown(
+            label: 'District',
+            icon: Icons.map,
+            value: _selDistrict,
+            options: _districts,
+            enabled: _selDivision != null,
+            placeholder: _selDivision != null
+                ? 'Select District…'
+                : 'Select division first',
+            onChanged: _onDistrictChanged,
+          ),
+        if (_showCity)
+          _filterDropdown(
+            label: 'City Corporation',
+            icon: Icons.location_city,
+            value: _selCityCorp,
+            options: _cityCorporations,
+            enabled: _selDistrict != null,
+            placeholder: _selDistrict != null
+                ? 'Select City Corporation…'
+                : 'Select district first',
+            onChanged: _onCityCorpChanged,
+          ),
+        if (_showUpazila)
+          _filterDropdown(
+            label: 'Upazila',
+            icon: Icons.apartment,
+            value: _selUpazila,
+            options: _upazilas,
+            enabled: _selDistrict != null,
+            loading: _loadingUpazila,
+            placeholder: _selDistrict != null
+                ? 'Select Upazila…'
+                : 'Select district first',
+            onChanged: _onUpazilaChanged,
+          ),
+        if (_showMunicipality)
+          _filterDropdown(
+            label: 'Municipality',
+            icon: Icons.home_work,
+            value: _selMunicipality,
+            options: _municipalities,
+            enabled: _selUpazila != null,
+            placeholder: _selUpazila != null
+                ? 'Select Municipality…'
+                : 'Select upazila first',
+            onChanged: _onMunicipalityChanged,
+          ),
+        if (_showUnion)
+          _filterDropdown(
+            label: 'Union',
+            icon: Icons.layers,
+            value: _selUnion,
+            options: _unions,
+            enabled: _selUpazila != null,
+            placeholder: _selUpazila != null
+                ? 'Select Union…'
+                : 'Select upazila first',
+            onChanged: _onUnionChanged,
+          ),
+        if (_showMauza)
+          _filterDropdown(
+            label: 'Mauza',
+            icon: Icons.terrain,
+            value: _selMauza,
+            options: _mauzas,
+            enabled: _selUnion != null,
+            placeholder: _selUnion != null
+                ? 'Select Mauza…'
+                : 'Select union first',
+            onChanged: _onMauzaChanged,
+          ),
+        if (_showVillage)
+          _filterDropdown(
+            label: 'Village',
+            icon: Icons.home_work_outlined,
+            value: _selVillage,
+            options: _villages,
+            enabled: _selMauza != null,
+            placeholder: _selMauza != null
+                ? 'Select Village…'
+                : 'Select mauza first',
+            onChanged: _onVillageChanged,
+          ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _resetAll,
+                icon: const Icon(Icons.restart_alt, size: 13),
+                label: const Text('Reset', style: TextStyle(fontSize: 10.5)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF475569),
+                  padding: const EdgeInsets.symmetric(vertical: 7),
+                  minimumSize: const Size(0, 32),
+                  side: const BorderSide(color: Color(0xFFE2E8F0)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(7),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed:
+                    (_downloadLoading ||
+                        !_layerConfigLoaded ||
+                        _featureCount == 0)
+                    ? null
+                    : _downloadExcel,
+                icon: _downloadLoading
+                    ? const SizedBox(
+                        width: 11,
+                        height: 11,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.4,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.cloud_download, size: 13),
+                label: const Text('Excel', style: TextStyle(fontSize: 10.5)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2563EB),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 7),
+                  minimumSize: const Size(0, 32),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(7),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (_error != null) ...[
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF2F2),
+              border: Border.all(color: const Color(0xFFFCA5A5)),
+              borderRadius: BorderRadius.circular(7),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Icons.error_outline,
+                  color: Color(0xFFDC2626),
+                  size: 12,
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: Color(0xFFB91C1C),
+                      fontSize: 10,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }
 
+  // ── Level selector ────────────────────────────────────────────────────────
+
   Widget _levelDropdown() {
     return Container(
-      padding: const EdgeInsets.all(12),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFFEFF6FF), Color(0xFFEEF2FF)],
-        ),
-        borderRadius: BorderRadius.circular(12),
+        color: const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(7),
         border: Border.all(color: const Color(0x292563EB)),
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Row(
             children: [
-              Icon(Icons.apartment, size: 14, color: Color(0xFF2563EB)),
-              SizedBox(width: 6),
+              Icon(Icons.apartment, size: 10, color: Color(0xFF2563EB)),
+              SizedBox(width: 3),
               Expanded(
                 child: Text(
                   'ADMINISTRATIVE LEVEL',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 11,
+                    fontSize: 8.5,
                     fontWeight: FontWeight.w800,
                     color: Color(0xFF1E3A8A),
-                    letterSpacing: 0.6,
+                    letterSpacing: 0.3,
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String>(
-            value: _levelValue,
-            isExpanded: true,
-            decoration: const InputDecoration(
-              filled: true,
-              fillColor: Colors.white,
+          const SizedBox(height: 3),
+          SizedBox(
+            width: double.infinity,
+            child: DropdownButtonFormField<String>(
+              value: _levelValue,
+              isExpanded: true,
               isDense: true,
-              contentPadding: EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: 10,
+              style: const TextStyle(fontSize: 11, color: Color(0xFF0F172A)),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: Colors.white,
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 5,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(6),
+                  borderSide: const BorderSide(color: Color(0x292563EB)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(6),
+                  borderSide: const BorderSide(color: Color(0x292563EB)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(6),
+                  borderSide: const BorderSide(color: Color(0xFF2563EB)),
+                ),
               ),
-              border: OutlineInputBorder(
-                borderSide: BorderSide(color: Color(0x292563EB)),
-              ),
-            ),
-            items: _adminLevels
-                .map(
-                  (row) => DropdownMenuItem<String>(
-                    value: row['value'],
-                    child: Text(
-                      row['label']!,
-                      style: const TextStyle(fontSize: 13),
+              items: _adminLevels
+                  .map(
+                    (row) => DropdownMenuItem<String>(
+                      value: row['value'],
+                      child: Text(
+                        row['label']!,
+                        style: const TextStyle(fontSize: 11),
+                      ),
                     ),
-                  ),
-                )
-                .toList(),
-            onChanged: _onLevelChanged,
+                  )
+                  .toList(),
+              onChanged: _onLevelChanged,
+            ),
           ),
         ],
       ),
     );
   }
+
+  // ── Filter card (stable-string-key DropdownButton) ───────────────────────
 
   Widget _filterDropdown({
     required String label,
@@ -1862,10 +2039,39 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
     bool loading = false,
     String? placeholder,
   }) {
+    // Stable string key for a map option.
+    String keyOf(Map<String, dynamic> m) {
+      final v = _clean(m['value']);
+      if (v.isNotEmpty) return 'v:$v';
+      final g = _clean(m['geo_code']);
+      if (g.isNotEmpty) return 'g:$g';
+      return 'i:${m['id']}';
+    }
+
+    // Build deduped key -> option map (first occurrence wins).
+    final seenKeys = <String>{};
+    final itemKeys = <String>[];
+    final keyToOption = <String, Map<String, dynamic>>{};
+    for (final opt in options) {
+      final k = keyOf(opt);
+      if (seenKeys.add(k)) {
+        itemKeys.add(k);
+        keyToOption[k] = opt;
+      }
+    }
+
+    // Resolve current value to a key that definitely exists in items.
+    String? currentKey;
+    if (value != null) {
+      final k = keyOf(value);
+      if (keyToOption.containsKey(k)) currentKey = k;
+    }
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 5),
       child: Container(
-        padding: const EdgeInsets.all(10),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
           color: value != null
               ? const Color(0x0F2563EB)
@@ -1875,78 +2081,102 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
                 ? const Color(0x382563EB)
                 : const Color(0x331E293B),
           ),
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(7),
         ),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
                 Container(
-                  width: 22,
-                  height: 22,
+                  width: 14,
+                  height: 14,
                   decoration: BoxDecoration(
                     color: value != null
                         ? const Color(0xFF2563EB)
                         : const Color(0xFFEFF6FF),
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(3),
                   ),
                   child: Icon(
                     icon,
-                    size: 12,
+                    size: 8.5,
                     color: value != null
                         ? Colors.white
                         : const Color(0xFF2563EB),
                   ),
                 ),
-                const SizedBox(width: 6),
-                Text(
-                  label.toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    color: value != null
-                        ? const Color(0xFF1D4ED8)
-                        : const Color(0xFF64748B),
-                    letterSpacing: 0.5,
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    label.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.w800,
+                      color: value != null
+                          ? const Color(0xFF1D4ED8)
+                          : const Color(0xFF64748B),
+                      letterSpacing: 0.3,
+                    ),
                   ),
                 ),
-                if (loading) ...[
-                  const SizedBox(width: 6),
+                if (loading)
                   const SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(strokeWidth: 1.5),
+                    width: 9,
+                    height: 9,
+                    child: CircularProgressIndicator(strokeWidth: 1.3),
                   ),
-                ],
               ],
             ),
-            const SizedBox(height: 6),
-            DropdownButtonHideUnderline(
-              child: DropdownButton<Map<String, dynamic>>(
-                value: value,
-                isExpanded: true,
-                hint: Text(
-                  placeholder ?? 'Select…',
+            const SizedBox(height: 2),
+            SizedBox(
+              width: double.infinity,
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: currentKey,
+                  isExpanded: true,
+                  isDense: true,
                   style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF94A3B8),
+                    fontSize: 11,
+                    color: Color(0xFF0F172A),
                   ),
-                ),
-                items: options
-                    .map(
-                      (opt) => DropdownMenuItem<Map<String, dynamic>>(
-                        value: opt,
-                        child: Text(
-                          (opt['label'] ?? '').toString(),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12.5),
+                  hint: Text(
+                    placeholder ?? 'Select…',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 10.5,
+                      color: Color(0xFF94A3B8),
+                    ),
+                  ),
+                  items: itemKeys
+                      .map(
+                        (k) => DropdownMenuItem<String>(
+                          value: k,
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: Text(
+                              (keyToOption[k]!['label'] ?? '').toString(),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                          ),
                         ),
-                      ),
-                    )
-                    .toList(),
-                onChanged: enabled && !loading ? onChanged : null,
+                      )
+                      .toList(),
+                  onChanged: enabled && !loading
+                      ? (k) {
+                          if (k == null) {
+                            onChanged(null);
+                          } else {
+                            onChanged(keyToOption[k]);
+                          }
+                        }
+                      : null,
+                ),
               ),
             ),
           ],
@@ -1954,6 +2184,8 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       ),
     );
   }
+
+  // ── Map panel with professional UI ────────────────────────────────────────
 
   Widget _buildMapPanel() {
     final fill =
@@ -1968,173 +2200,354 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
 
     return Stack(
       children: [
-        FlutterMap(
-          mapController: _mapController,
-          options: const MapOptions(
-            initialCenter: _bdCenter,
-            initialZoom: _bdZoom,
-            minZoom: 4,
-            maxZoom: 18,
-          ),
-          children: [
-            TileLayer(
-              urlTemplate: tileUrl,
-              userAgentPackageName: 'com.example.bgisp',
+        Positioned.fill(
+          child: FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: _bdCenter,
+              initialZoom: _bdZoom,
+              minZoom: 4,
+              maxZoom: 18,
+              onPositionChanged: (camera, hasGesture) {
+                if (_showCoords) {
+                  setState(() => _cursorLatLng = camera.center);
+                }
+              },
             ),
-            if (_highlightPolygons.isNotEmpty)
-              PolygonLayer(
-                polygons: _highlightPolygons
-                    .map(
-                      (ring) => Polygon(
-                        points: ring,
-                        color: fill,
-                        borderColor: line,
-                        borderStrokeWidth: 1.5,
-                      ),
-                    )
-                    .toList(),
+            children: [
+              TileLayer(
+                urlTemplate: tileUrl,
+                userAgentPackageName: 'com.example.bgisp',
+                retinaMode: MediaQuery.of(context).devicePixelRatio > 1.5,
               ),
-          ],
+              if (_highlightPolygons.isNotEmpty)
+                PolygonLayer(
+                  polygons: _highlightPolygons
+                      .map(
+                        (ring) => Polygon(
+                          points: ring,
+                          color: fill,
+                          borderColor: line,
+                          borderStrokeWidth: 1.8,
+                        ),
+                      )
+                      .toList(),
+                ),
+              const RichAttributionWidget(
+                alignment: AttributionAlignment.bottomLeft,
+                attributions: [
+                  TextSourceAttribution(
+                    'Esri, OpenStreetMap contributors',
+                    prependCopyright: true,
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
-        // Full extent button.
+
         Positioned(
-          top: 12,
-          right: 12,
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 120,
+          child: IgnorePointer(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Color(0xCC0F172A), Color(0x000F172A)],
+                ),
+              ),
+            ),
+          ),
+        ),
+
+        Positioned(left: 16, bottom: 90, child: _zoomControls()),
+
+        Positioned(left: 16, bottom: 16, child: _basemapSwitcher()),
+
+        if (_basemapMenuOpen)
+          Positioned(left: 16, bottom: 70, child: _basemapMenu()),
+
+        Positioned(
+          right: 16,
+          bottom: 90,
           child: _mapButton(
             icon: Icons.fullscreen,
             tooltip: 'Full extent',
             onTap: _fullExtent,
           ),
         ),
-        // Basemap button.
+
+        Positioned(right: 16, bottom: 16, child: _featureInfoPill(line)),
+
+        if (_showCoords && _cursorLatLng != null)
+          Positioned(top: 76, left: 16, child: _coordsPill(_cursorLatLng!)),
+
         Positioned(
-          top: 60,
-          right: 12,
+          top: 76,
+          left: 16,
           child: _mapButton(
-            icon: Icons.map,
-            tooltip: 'Base maps',
-            active: _basemapMenuOpen,
-            onTap: () => setState(() => _basemapMenuOpen = !_basemapMenuOpen),
+            icon: _showCoords ? Icons.my_location : Icons.location_searching,
+            tooltip: _showCoords ? 'Hide coordinates' : 'Show coordinates',
+            active: _showCoords,
+            onTap: () => setState(() => _showCoords = !_showCoords),
           ),
         ),
-        if (_basemapMenuOpen)
-          Positioned(
-            top: 60,
-            right: 60,
-            child: Material(
-              elevation: 8,
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                width: 170,
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: _basemaps
-                      .map(
-                        (b) => InkWell(
-                          onTap: () {
-                            setState(() {
-                              _basemapKey = b['key']!;
-                              _basemapMenuOpen = false;
-                            });
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            ),
-                            color: _basemapKey == b['key']
-                                ? const Color(0xFFEFF6FF)
-                                : Colors.transparent,
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.layers,
-                                  size: 14,
-                                  color: _basemapKey == b['key']
-                                      ? const Color(0xFF2563EB)
-                                      : const Color(0xFF64748B),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  b['label']!,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: _basemapKey == b['key']
-                                        ? FontWeight.w700
-                                        : FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      )
-                      .toList(),
-                ),
-              ),
-            ),
-          ),
+
         if (_mapLoading)
           const Positioned.fill(
             child: IgnorePointer(
               child: ColoredBox(
-                color: Color(0x40FFFFFF),
-                child: Center(child: CircularProgressIndicator()),
+                color: Color(0x330F172A),
+                child: Center(
+                  child: SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.4,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
-        // Legend chip at bottom-left.
-        Positioned(
-          left: 12,
-          bottom: 12,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.92),
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.08),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: line,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  _levelLabel,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '${_featureCount.toString()} features',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFF64748B),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
       ],
     );
   }
+
+  // ── Zoom controls ─────────────────────────────────────────────────────────
+
+  Widget _zoomControls() {
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(10),
+      color: Colors.white,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _zoomButton(
+            icon: Icons.add,
+            tooltip: 'Zoom in',
+            onTap: () {
+              final z = _mapController.camera.zoom + 1;
+              _mapController.move(_mapController.camera.center, z);
+            },
+          ),
+          Container(height: 1, width: 34, color: const Color(0xFFE2E8F0)),
+          _zoomButton(
+            icon: Icons.remove,
+            tooltip: 'Zoom out',
+            onTap: () {
+              final z = _mapController.camera.zoom - 1;
+              _mapController.move(_mapController.camera.center, z);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _zoomButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        child: SizedBox(
+          width: 40,
+          height: 40,
+          child: Icon(icon, size: 18, color: const Color(0xFF334155)),
+        ),
+      ),
+    );
+  }
+
+  // ── Basemap switcher ──────────────────────────────────────────────────────
+
+  Widget _basemapSwitcher() {
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(10),
+      color: Colors.white,
+      child: InkWell(
+        onTap: () => setState(() => _basemapMenuOpen = !_basemapMenuOpen),
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.layers, size: 16, color: Color(0xFF334155)),
+              const SizedBox(width: 6),
+              Text(
+                _basemaps.firstWhere(
+                  (b) => b['key'] == _basemapKey,
+                  orElse: () => _basemaps.first,
+                )['label']!,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF334155),
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(
+                _basemapMenuOpen ? Icons.expand_more : Icons.expand_less,
+                size: 14,
+                color: const Color(0xFF64748B),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _basemapMenu() {
+    return Material(
+      elevation: 10,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 190,
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: _basemaps
+              .map(
+                (b) => InkWell(
+                  onTap: () {
+                    setState(() {
+                      _basemapKey = b['key']!;
+                      _basemapMenuOpen = false;
+                    });
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    color: _basemapKey == b['key']
+                        ? const Color(0xFFEFF6FF)
+                        : Colors.transparent,
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.layers,
+                          size: 14,
+                          color: _basemapKey == b['key']
+                              ? const Color(0xFF2563EB)
+                              : const Color(0xFF64748B),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          b['label']!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: _basemapKey == b['key']
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                            color: const Color(0xFF0F172A),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+              .toList(),
+        ),
+      ),
+    );
+  }
+
+  // ── Feature info pill ─────────────────────────────────────────────────────
+
+  Widget _featureInfoPill(Color line) {
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(20),
+      color: Colors.white,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(color: line, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              _levelLabel,
+              style: const TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF0F172A),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(width: 1, height: 12, color: const Color(0xFFE2E8F0)),
+            const SizedBox(width: 8),
+            Text(
+              '${_featureCount.toString()} features',
+              style: const TextStyle(
+                fontSize: 11.5,
+                color: Color(0xFF64748B),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Coordinates pill ──────────────────────────────────────────────────────
+
+  Widget _coordsPill(LatLng ll) {
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(20),
+      color: Colors.white,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.my_location, size: 12, color: Color(0xFF2563EB)),
+            const SizedBox(width: 6),
+            Text(
+              '${ll.latitude.toStringAsFixed(5)}, ${ll.longitude.toStringAsFixed(5)}',
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF0F172A),
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Circular map button ───────────────────────────────────────────────────
 
   Widget _mapButton({
     required IconData icon,
@@ -2147,12 +2560,12 @@ class _GeocodeDownloadPageState extends State<GeocodeDownloadPage> {
       child: Material(
         color: active ? const Color(0xFF2563EB) : Colors.white,
         shape: const CircleBorder(),
-        elevation: 3,
+        elevation: 6,
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.all(11),
             child: Icon(
               icon,
               size: 18,

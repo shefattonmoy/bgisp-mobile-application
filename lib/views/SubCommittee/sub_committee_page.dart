@@ -240,7 +240,7 @@ class _SubCommitteePageState extends State<SubCommitteePage> {
   }
 
   Widget _buildMemberCard(SubCommitteeMember member, bool isBangla) {
-    final accent = const Color(0xFF667eea);
+    const accent = Color(0xFF667eea);
 
     return Card(
       elevation: 3,
@@ -303,7 +303,7 @@ class _SubCommitteePageState extends State<SubCommitteePage> {
                         isBangla ? member.displayRoleBn : member.displayRole,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 9.5,
                           color: accent,
                           fontWeight: FontWeight.w600,
@@ -353,7 +353,7 @@ class _SubCommitteePageState extends State<SubCommitteePage> {
           width: 80,
           height: 80,
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => _initialsAvatar(member, accent),
+          errorBuilder: (_, _, _) => _initialsAvatar(member, accent),
           loadingBuilder: (context, child, progress) {
             if (progress == null) return child;
             return SizedBox(
